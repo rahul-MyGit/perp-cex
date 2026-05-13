@@ -154,3 +154,12 @@ Expected response:
 ```text
 400 Bad Request
 ```
+
+# TODO TO ATTEMPT
+- currently marketprice = indexPrice , now ( add some premium to indexPrice)
+- close position logic + realised PnL
+- position netting (A buy 2 SOL and sell 1 SOL then reduce long to 1 SOL)
+- liquidation engine
+- multiple price aggregator
+- order type
+bla bla
