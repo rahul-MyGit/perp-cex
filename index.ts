@@ -333,16 +333,33 @@ function updateFundingRate() {
 function applyFunding() {
   if (fundingRate === 0) return;
 
-  for (const position of positions) {
-    const payment = position.entryPrice * position.quantity * Math.abs(fundingRate);
+  const payingSide: PositionSide = fundingRate > 0 ? "long" : "short";
+  const receivingSide: PositionSide = fundingRate > 0 ? "short" : "long";
+  const payingPositions = positions.filter((position) => position.side === payingSide);
+  const receivingPositions = positions.filter((position) => position.side === receivingSide);
+  const totalReceivingNotional = receivingPositions.reduce(
+    (total, position) => total + getPositionNotional(position),
+    0,
+  );
 
-    if (fundingRate > 0) {
-      position.fundingPnl += position.side === "long" ? -payment : payment;
-      continue;
-    }
+  if (payingPositions.length === 0 || totalReceivingNotional === 0) return;
 
-    position.fundingPnl += position.side === "long" ? payment : -payment;
+  let totalFundingPaid = 0;
+
+  for (const position of payingPositions) {
+    const payment = getPositionNotional(position) * Math.abs(fundingRate);
+    position.fundingPnl -= payment;
+    totalFundingPaid += payment;
   }
+
+  for (const position of receivingPositions) {
+    const receiveShare = getPositionNotional(position) / totalReceivingNotional;
+    position.fundingPnl += totalFundingPaid * receiveShare;
+  }
+}
+
+function getPositionNotional(position: Position) {
+  return position.entryPrice * position.quantity;
 }
 
 function updateEquity() {
