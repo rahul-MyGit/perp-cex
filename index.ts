@@ -49,11 +49,11 @@ const orderSchema = z.object({
   price: z.number().positive("price must be a positive number"),
   quantity: z.number().positive("quantity must be a positive number"),
   leverage: z.number().positive("leverage must be a positive number"),
-  markPrice: z.number().positive("markPrice must be a positive number").optional(),
+  indexPrice: z.number().positive("indexPrice must be a positive number").optional(),
 });
 
-const markPriceSchema = z.object({
-  markPrice: z.number().positive("markPrice must be a positive number"),
+const indexPriceSchema = z.object({
+  indexPrice: z.number().positive("indexPrice must be a positive number"),
 });
 
 interface OrderInput extends z.infer<typeof orderSchema> {}
@@ -72,6 +72,7 @@ const asks: Order[] = [];
 const trades: Trade[] = [];
 const positions: Position[] = [];
 
+let indexPrice = 100_000;
 let markPrice = 100_000;
 let fundingRate = 0;
 
@@ -80,7 +81,7 @@ app.use(express.json());
 app.get("/", (_request, response) => {
   response.json({
     message: "Perp CEX demo backend",
-    endpoints: ["POST /order", "POST /mark-price", "GET /state"],
+    endpoints: ["POST /order", "POST /index-price", "GET /state"],
   });
 });
 
@@ -109,7 +110,7 @@ app.post("/order", (request, response) => {
     return;
   }
 
-  if (orderInput.markPrice) markPrice = orderInput.markPrice;
+  if (orderInput.indexPrice) updateIndexPrice(orderInput.indexPrice);
 
   user.balance -= requiredMargin;
 
@@ -124,6 +125,7 @@ app.post("/order", (request, response) => {
     order,
     trades: matchedTrades,
     user,
+    indexPrice,
     markPrice,
     fundingRate,
     orderbook: getOrderbookSnapshot(),
@@ -131,18 +133,19 @@ app.post("/order", (request, response) => {
   });
 });
 
-app.post("/mark-price", (request, response) => {
-  const parsedBody = markPriceSchema.safeParse(request.body);
+app.post("/index-price", (request, response) => {
+  const parsedBody = indexPriceSchema.safeParse(request.body);
 
   if (!parsedBody.success) {
     response.status(400).json({ error: formatZodError(parsedBody.error) });
     return;
   }
 
-  markPrice = parsedBody.data.markPrice;
+  updateIndexPrice(parsedBody.data.indexPrice);
   refreshPricing();
 
   response.json({
+    indexPrice,
     markPrice,
     fundingRate,
     positions,
@@ -152,6 +155,7 @@ app.post("/mark-price", (request, response) => {
 app.get("/state", (_request, response) => {
   response.json({
     users: Array.from(users.values()),
+    indexPrice,
     markPrice,
     fundingRate,
     orderbook: getOrderbookSnapshot(),
@@ -326,8 +330,13 @@ function updateFundingRate() {
     return;
   }
 
-  const rawFundingRate = (midPrice - markPrice) / markPrice;
+  const rawFundingRate = (midPrice - indexPrice) / indexPrice;
   fundingRate = clamp(rawFundingRate, -maxFundingRate, maxFundingRate);
+}
+
+function updateIndexPrice(nextIndexPrice: number) {
+  indexPrice = nextIndexPrice;
+  markPrice = nextIndexPrice;
 }
 
 function applyFunding() {
