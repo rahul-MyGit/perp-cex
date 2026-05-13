@@ -1,5 +1,6 @@
 import express from "express";
 import { z } from "zod";
+import { createBinancePriceFeed } from "./utils/binance-price-feed";
 
 interface User {
   userId: string;
@@ -49,11 +50,6 @@ const orderSchema = z.object({
   price: z.number().positive("price must be a positive number"),
   quantity: z.number().positive("quantity must be a positive number"),
   leverage: z.number().positive("leverage must be a positive number"),
-  indexPrice: z.number().positive("indexPrice must be a positive number").optional(),
-});
-
-const indexPriceSchema = z.object({
-  indexPrice: z.number().positive("indexPrice must be a positive number"),
 });
 
 interface OrderInput extends z.infer<typeof orderSchema> {}
@@ -61,6 +57,8 @@ interface OrderInput extends z.infer<typeof orderSchema> {}
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
 const maxFundingRate = 0.0075;
+const fundingIntervalHours = getFundingIntervalHours();
+const fundingIntervalMs = fundingIntervalHours * 60 * 60 * 1_000;
 
 const users = new Map<string, User>([
   ["alice", { userId: "alice", balance: 100_000 }],
@@ -72,16 +70,26 @@ const asks: Order[] = [];
 const trades: Trade[] = [];
 const positions: Position[] = [];
 
-let indexPrice = 100_000;
-let markPrice = 100_000;
+let indexPrice: number | null = null;
+let markPrice: number | null = null;
 let fundingRate = 0;
+let lastFundingAt: string | null = null;
+let nextFundingAt = new Date(Date.now() + fundingIntervalMs).toISOString();
+
+const priceFeed = createBinancePriceFeed({
+  symbol: "solusdt",
+  onPrice: (price) => {
+    updateIndexPrice(price);
+    refreshPricing();
+  },
+});
 
 app.use(express.json());
 
 app.get("/", (_request, response) => {
   response.json({
     message: "Perp CEX demo backend",
-    endpoints: ["POST /order", "POST /index-price", "GET /state"],
+    endpoints: ["POST /order", "GET /state"],
   });
 });
 
@@ -110,8 +118,6 @@ app.post("/order", (request, response) => {
     return;
   }
 
-  if (orderInput.indexPrice) updateIndexPrice(orderInput.indexPrice);
-
   user.balance -= requiredMargin;
 
   const order = createOrder(orderInput);
@@ -128,27 +134,10 @@ app.post("/order", (request, response) => {
     indexPrice,
     markPrice,
     fundingRate,
+    lastFundingAt,
+    nextFundingAt,
     orderbook: getOrderbookSnapshot(),
     positions: getUserPositions(order.userId),
-  });
-});
-
-app.post("/index-price", (request, response) => {
-  const parsedBody = indexPriceSchema.safeParse(request.body);
-
-  if (!parsedBody.success) {
-    response.status(400).json({ error: formatZodError(parsedBody.error) });
-    return;
-  }
-
-  updateIndexPrice(parsedBody.data.indexPrice);
-  refreshPricing();
-
-  response.json({
-    indexPrice,
-    markPrice,
-    fundingRate,
-    positions,
   });
 });
 
@@ -158,11 +147,18 @@ app.get("/state", (_request, response) => {
     indexPrice,
     markPrice,
     fundingRate,
+    fundingIntervalHours,
+    lastFundingAt,
+    nextFundingAt,
+    priceFeed: priceFeed.getStatus(),
     orderbook: getOrderbookSnapshot(),
     trades,
     positions,
   });
 });
+
+priceFeed.start();
+setInterval(settleFunding, fundingIntervalMs);
 
 app.listen(port, () => {
   console.log(`Perp CEX demo backend on http://localhost:${port}`);
@@ -310,11 +306,21 @@ function addOpenOrder(order: Order) {
 function refreshPricing() {
   updateUnrealizedPnl();
   updateFundingRate();
-  applyFunding();
   updateEquity();
 }
 
+function settleFunding() {
+  updateFundingRate();
+  applyFunding();
+  updateEquity();
+
+  lastFundingAt = new Date().toISOString();
+  nextFundingAt = new Date(Date.now() + fundingIntervalMs).toISOString();
+}
+
 function updateUnrealizedPnl() {
+  if (markPrice === null) return;
+
   for (const position of positions) {
     position.unrealizedPnl =
       position.side === "long"
@@ -325,7 +331,7 @@ function updateUnrealizedPnl() {
 
 function updateFundingRate() {
   const midPrice = getMidPrice();
-  if (!midPrice) {
+  if (!midPrice || indexPrice === null) {
     fundingRate = 0;
     return;
   }
@@ -432,6 +438,14 @@ function sortAsks() {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getFundingIntervalHours() {
+  const configuredHours = Number(process.env.FUNDING_INTERVAL_HOURS ?? 8);
+
+  if (!Number.isFinite(configuredHours) || configuredHours <= 0) return 8;
+
+  return configuredHours;
 }
 
 function createId(prefix: string) {
