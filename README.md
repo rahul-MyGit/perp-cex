@@ -60,7 +60,8 @@ margin = price * quantity / leverage
 Funding is capped to `+/-0.75%`.
 
 If funding is positive, longs pay shorts. If funding is negative, shorts pay
-longs.
+longs. Funding is zero-sum in this demo: the receiving side only receives the
+exact amount paid by the paying side, distributed by position size.
 
 ## Test The Backend
 
@@ -264,6 +265,17 @@ Because funding is positive:
 - shorts receive funding
 
 Alice's long funding PnL decreases. Bob's short funding PnL increases.
+
+In this example, Alice and Bob both have the same `100000` notional, so:
+
+```text
+Alice pays 100000 * 0.0075 = 750
+Bob receives 750
+```
+
+If there are many shorts, they split the received funding by position notional.
+For example, if Bob has `40%` of short notional and Charlie has `60%`, Bob gets
+`40%` of the funding and Charlie gets `60%`.
 
 ### 3. Inspect Funding State
 
